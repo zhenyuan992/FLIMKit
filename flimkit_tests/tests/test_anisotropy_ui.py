@@ -299,6 +299,11 @@ def test_redrawing_result_replaces_existing_colorbar():
 
         dialog._draw_result()
         axes_after_first_draw = len(dialog.figure.axes)
+        direct_tab_labels = [
+            dialog.result_notebook.tab(tab_id, 'text')
+            for tab_id in dialog.result_notebook.tabs()
+        ]
+        assert direct_tab_labels == ['Direct diagnostic']
         color_limits = dialog.axes[1, 1].images[0].get_clim()
         plotted_time = dialog.axes[1, 0].lines[0].get_xdata()
         dialog._draw_result()
@@ -354,6 +359,10 @@ def test_global_fit_mode_draws_polarized_models_and_residuals():
             common_irf_shift_bins=0.7,
             parallel_background=2.5,
             perpendicular_background=7.0,
+            parallel_deviance_residual=np.array([0.2, -0.1, 0.3]),
+            perpendicular_deviance_residual=np.array([-0.2, 0.1, -0.3]),
+            parallel_irf=np.array([0.1, 0.8, 0.1]),
+            perpendicular_irf=np.array([0.05, 0.7, 0.25]),
         )
         dialog.result = SimpleNamespace(
             parallel_decay=np.array([9.0, 7.0, 3.0, 1.0]),
@@ -362,11 +371,24 @@ def test_global_fit_mode_draws_polarized_models_and_residuals():
             perpendicular_background=2.0,
             polarized_fit=fit,
             time_ns=np.arange(4, dtype=float),
-            metadata={},
+            g_factor=1.2,
+            parallel_exposure=1.5,
+            perpendicular_exposure=0.8,
+            metadata={
+                'analysis_start_ns': 0.0,
+                'analysis_stop_ns': 2.0,
+                'repetition_period_ns': 3.0,
+            },
         )
         dialog.peak_bin = 1
 
         dialog._draw_result()
+        tab_labels = [
+            dialog.result_notebook.tab(tab_id, 'text')
+            for tab_id in dialog.result_notebook.tabs()
+        ]
+        assert tab_labels == [
+            'Global fit', 'Anisotropy interpretation', 'Fit diagnostics']
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 'error', message='constrained_layout not applied.*')
@@ -380,7 +402,7 @@ def test_global_fit_mode_draws_polarized_models_and_residuals():
         assert dialog.axes[1, 1].texts[0].get_window_extent(renderer).y0 >= 0
         assert dialog.axes[0, 0].get_title() == 'Parallel global fit'
         assert dialog.axes[0, 1].get_title() == 'Perpendicular global fit'
-        assert dialog.axes[1, 0].get_title() == 'Residuals'
+        assert dialog.axes[1, 0].get_title() == r'Raw count residuals  $N-M$'
         summary = dialog.axes[1, 1].texts[0].get_text()
         assert 'Rotational correlation' in summary
         assert 'Fixed fluorescence lifetime' in summary
@@ -398,6 +420,63 @@ def test_global_fit_mode_draws_polarized_models_and_residuals():
         assert dialog.axes[0, 0].xaxis.label.get_color() == '#222222'
         assert dialog.axes[0, 0].get_legend().get_texts()[0].get_color() == '#222222'
         assert dialog.axes[1, 1].texts[0].get_color() == '#222222'
+
+        dialog.interpretation_canvas.draw()
+        interpretation_titles = [
+            axis.get_title() for axis in dialog.interpretation_axes.flat]
+        assert interpretation_titles[0].startswith(
+            'Sensitivity- and exposure-corrected polarized decays')
+        assert '$J_{\\parallel}' in interpretation_titles[0]
+        assert '$J_{\\perp}' in interpretation_titles[0]
+        assert '$r(t)=r(0)e^{-t/\\theta}$' in interpretation_titles[1]
+        assert interpretation_titles[2] == (
+            'Measured and model-derived apparent anisotropy')
+        assert 'J_{\\parallel}' in dialog.interpretation_axes[1, 0].get_ylabel()
+        assert 'J_{\\perp}' in dialog.interpretation_axes[1, 0].get_ylabel()
+        assert 'S(t)=' in interpretation_titles[3]
+        assert 'D(t)=' in interpretation_titles[3]
+        assert 'J_{\\parallel}' in interpretation_titles[3]
+        assert len(dialog.interpretation_axes[0, 0].lines) == 4
+        assert len(dialog.interpretation_axes[0, 1].lines) == 2
+        assert len(dialog.interpretation_axes[1, 0].lines) == 3
+        assert len(dialog.interpretation_axes[1, 1].lines) == 5
+        assert '$' in dialog.interpretation_axes[0, 1].get_ylabel()
+        assert dialog.interpretation_axes[0, 0].title.get_color() == '#222222'
+
+        dialog.diagnostics_canvas.draw()
+        diagnostic_titles = [
+            axis.get_title() for axis in dialog.diagnostics_axes.flat]
+        assert 'Signed Poisson-deviance residuals' in diagnostic_titles[0]
+        assert '$R_D' in diagnostic_titles[0]
+        assert 'Per-bin Poisson-deviance contribution' in diagnostic_titles[1]
+        assert '$R_D^2=' in diagnostic_titles[1]
+        assert 'Polarization-specific IRFs' in diagnostic_titles[2]
+        assert '$L_{\\parallel}' in diagnostic_titles[2]
+        assert 'Photon support across fitted laser period' in diagnostic_titles[3]
+        assert 'S(t)=' in diagnostic_titles[3]
+        assert 'J_{\\parallel}' in diagnostic_titles[3]
+        assert len(dialog.diagnostics_axes[0, 0].lines) == 3
+        assert len(dialog.diagnostics_axes[0, 1].lines) == 2
+        assert len(dialog.diagnostics_axes[1, 0].lines) == 2
+        assert len(dialog.diagnostics_axes[1, 1].lines) >= 4
+        assert dialog.diagnostics_axes[0, 0].title.get_color() == '#222222'
+
+        dialog.result = SimpleNamespace(
+            parallel_intensity=np.ones((2, 2)),
+            perpendicular_intensity=np.ones((2, 2)),
+            anisotropy_decay=np.array([0.2, 0.1, 0.0, -0.1]),
+            anisotropy_map=np.zeros((2, 2)),
+            spatial_window=1,
+            stride=1,
+            time_ns=np.arange(4, dtype=float),
+            metadata={'analysis_start_ns': 0.0, 'analysis_stop_ns': 2.0},
+        )
+        dialog._draw_result()
+        switched_tab_labels = [
+            dialog.result_notebook.tab(tab_id, 'text')
+            for tab_id in dialog.result_notebook.tabs()
+        ]
+        assert switched_tab_labels == ['Direct diagnostic']
     finally:
         mpl.rcParams.update(original_colors)
         root.destroy()

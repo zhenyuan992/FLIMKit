@@ -130,13 +130,48 @@ class AnisotropyTool(tk.Toplevel):
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
 
+        self.result_notebook = ttk.Notebook(self)
+        self.result_notebook.pack(fill='both', expand=True, padx=8, pady=8)
+        self.fit_plot_page = ttk.Frame(self.result_notebook)
+        self.interpretation_plot_page = ttk.Frame(self.result_notebook)
+        self.diagnostics_plot_page = ttk.Frame(self.result_notebook)
+        self.result_notebook.add(self.fit_plot_page, text='Direct diagnostic')
+
         self.figure = Figure(figsize=(10.8, 6.0), dpi=100,
                              constrained_layout=True)
         self.figure.get_layout_engine().set(w_pad=0.08, h_pad=0.05)
         self.axes = self.figure.subplots(2, 2)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self)
-        self.canvas.get_tk_widget().pack(fill='both', expand=True, padx=8, pady=8)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.fit_plot_page)
+        self.canvas.get_tk_widget().pack(fill='both', expand=True)
+
+        self.interpretation_figure = Figure(figsize=(10.8, 6.0), dpi=100)
+        self.interpretation_axes = self.interpretation_figure.subplots(2, 2)
+        self.interpretation_canvas = FigureCanvasTkAgg(
+            self.interpretation_figure, master=self.interpretation_plot_page)
+        self.interpretation_canvas.get_tk_widget().pack(fill='both', expand=True)
+
+        self.diagnostics_figure = Figure(figsize=(10.8, 6.0), dpi=100)
+        self.diagnostics_axes = self.diagnostics_figure.subplots(2, 2)
+        self.diagnostics_canvas = FigureCanvasTkAgg(
+            self.diagnostics_figure, master=self.diagnostics_plot_page)
+        self.diagnostics_canvas.get_tk_widget().pack(fill='both', expand=True)
         self._draw_empty()
+
+    def _show_global_result_tabs(self):
+        self.result_notebook.tab(self.fit_plot_page, text='Global fit')
+        current_tabs = self.result_notebook.tabs()
+        if str(self.interpretation_plot_page) not in current_tabs:
+            self.result_notebook.add(
+                self.interpretation_plot_page, text='Anisotropy interpretation')
+        if str(self.diagnostics_plot_page) not in current_tabs:
+            self.result_notebook.add(
+                self.diagnostics_plot_page, text='Fit diagnostics')
+
+    def _show_direct_result_tab(self):
+        for page in (self.interpretation_plot_page, self.diagnostics_plot_page):
+            if str(page) in self.result_notebook.tabs():
+                self.result_notebook.forget(page)
+        self.result_notebook.tab(self.fit_plot_page, text='Direct diagnostic')
 
     def _draw_empty(self):
         titles = ['Parallel intensity', 'Perpendicular intensity',
@@ -151,9 +186,13 @@ class AnisotropyTool(tk.Toplevel):
         self.canvas.draw_idle()
 
     def _style_plot_text(self):
+        self._style_figure(self.figure)
+
+    @staticmethod
+    def _style_figure(figure):
         text_color = '#222222'
-        self.figure.set_facecolor('white')
-        for axis in self.figure.axes:
+        figure.set_facecolor('white')
+        for axis in figure.axes:
             axis.set_facecolor('white')
             axis.tick_params(axis='both', colors=text_color)
             axis.title.set_color(text_color)
@@ -362,9 +401,13 @@ class AnisotropyTool(tk.Toplevel):
         for axis in self.axes.flat:
             axis.clear()
         if getattr(self.result, 'polarized_fit', None) is not None:
+            self._show_global_result_tabs()
             self._draw_global_fit()
+            self._draw_global_interpretation()
+            self._draw_global_diagnostics()
             self.canvas.draw_idle()
             return
+        self._show_direct_result_tab()
         self.figure.set_layout_engine('constrained')
         self.figure.get_layout_engine().set(w_pad=0.08, h_pad=0.05)
         self.axes[0, 0].imshow(self.result.parallel_intensity, cmap='gray')
@@ -445,7 +488,8 @@ class AnisotropyTool(tk.Toplevel):
             time_relative, fit.perpendicular_residual,
             color='#a34a28', linewidth=1.2, label='Perpendicular')
         self.axes[1, 0].axhline(0.0, color='#777777', linewidth=0.8)
-        self.axes[1, 0].set_title('Residuals', fontsize=11)
+        self.axes[1, 0].set_title(
+            r'Raw count residuals  $N-M$', fontsize=8)
         self.axes[1, 0].set_xlabel('Time after peak (ns)', fontsize=9)
         self.axes[1, 0].set_ylabel('Observed - model', fontsize=9)
         self.axes[1, 0].tick_params(labelsize=8)
@@ -476,13 +520,262 @@ class AnisotropyTool(tk.Toplevel):
             ])
         summary = '\n'.join(summary_lines)
         summary_fontsize = 8 if len(summary_lines) <= 12 else 7
-        self.axes[1, 1].set_position([0.60, 0.01, 0.37, 0.48])
+        self.axes[1, 1].set_position([0.60, 0.01, 0.37, 0.54])
         self.axes[1, 1].text(
             0.05, 0.95, summary, ha='left', va='top',
             fontsize=summary_fontsize,
             transform=self.axes[1, 1].transAxes)
         self.axes[1, 1].set_axis_off()
         self._style_plot_text()
+
+    def _draw_global_interpretation(self):
+        assert self.result is not None
+        fit = self.result.polarized_fit
+        assert fit is not None
+        axes = self.interpretation_axes
+        for axis in axes.flat:
+            axis.clear()
+        self.interpretation_figure.subplots_adjust(
+            left=0.09, right=0.98, bottom=0.17, top=0.91,
+            wspace=0.30, hspace=0.72)
+
+        fit_bins = len(fit.parallel_model)
+        fit_time = self.result.time_ns[:fit_bins]
+        time_relative = fit_time - self.result.time_ns[self.peak_bin]
+        model_time = fit_time - fit_time[0]
+        parallel_observed = (
+            self.result.parallel_decay[:fit_bins] + self.result.parallel_background)
+        perpendicular_observed = (
+            self.result.perpendicular_decay[:fit_bins]
+            + self.result.perpendicular_background)
+        g_factor = self.result.g_factor
+        parallel_exposure = self.result.parallel_exposure
+        perpendicular_exposure = self.result.perpendicular_exposure
+
+        parallel_corrected = (
+            (parallel_observed - fit.parallel_background) / parallel_exposure)
+        perpendicular_corrected = (
+            g_factor * (perpendicular_observed - fit.perpendicular_background)
+            / perpendicular_exposure)
+        parallel_model_corrected = (
+            (fit.parallel_model - fit.parallel_background) / parallel_exposure)
+        perpendicular_model_corrected = (
+            g_factor * (fit.perpendicular_model - fit.perpendicular_background)
+            / perpendicular_exposure)
+
+        corrected_axis = axes[0, 0]
+        corrected_curves = (
+            (parallel_corrected, '#2468a2', 'o',
+             r'Measured $J_{\parallel}$'),
+            (parallel_model_corrected, '#2468a2', None,
+             r'Model $J_{\parallel}$'),
+            (perpendicular_corrected, '#a34a28', 'o',
+             r'Measured $J_{\perp}$'),
+            (perpendicular_model_corrected, '#a34a28', None,
+             r'Model $J_{\perp}$'),
+        )
+        for values, color, marker, label in corrected_curves:
+            positive = np.where(values > 0, values, np.nan)
+            corrected_axis.semilogy(
+                time_relative, positive, color=color,
+                linewidth=1.8 if marker is None else 0.9,
+                marker=marker, markersize=2.5, label=label)
+        corrected_axis.set_title(
+            'Sensitivity- and exposure-corrected polarized decays\n'
+            r'$J_{\parallel}=(N_{\parallel}-B_{\parallel})/E_{\parallel}$,  '
+            r'$J_{\perp}=G(N_{\perp}-B_{\perp})/E_{\perp}$', fontsize=9)
+        corrected_axis.set_xlabel('Time after measured peak (ns)', fontsize=8)
+        corrected_axis.set_ylabel(r'Corrected counts  $I_{\mathrm{corr}}(t)$', fontsize=8)
+        corrected_axis.legend(fontsize=6, ncol=2)
+
+        intrinsic_axis = axes[0, 1]
+        intrinsic = fit.initial_anisotropy * np.exp(
+            -model_time / fit.rotational_correlation_ns)
+        intrinsic_axis.plot(model_time, intrinsic, color='#6f3c8d', linewidth=2.0)
+        intrinsic_axis.axhline(0.0, color='#777777', linewidth=0.8)
+        intrinsic_axis.set_title(
+            r'Intrinsic model  $r(t)=r(0)e^{-t/\theta}$', fontsize=10)
+        intrinsic_axis.set_xlabel('Model time in fitted period (ns)', fontsize=8)
+        intrinsic_axis.set_ylabel(r'Intrinsic anisotropy  $r(t)$', fontsize=8)
+
+        def apparent_anisotropy(parallel_values, perpendicular_values):
+            denominator = parallel_values + 2.0 * perpendicular_values
+            return np.divide(
+                parallel_values - perpendicular_values, denominator,
+                out=np.full_like(denominator, np.nan, dtype=float),
+                where=denominator > 0)
+
+        apparent_axis = axes[1, 0]
+        apparent_axis.plot(
+            time_relative,
+            apparent_anisotropy(parallel_corrected, perpendicular_corrected),
+            color='#777777', linewidth=1.0, marker='o', markersize=2.5,
+            label='Measured apparent ratio')
+        apparent_axis.plot(
+            time_relative,
+            apparent_anisotropy(
+                parallel_model_corrected, perpendicular_model_corrected),
+            color='#2468a2', linewidth=2.0, label='Model-derived apparent ratio')
+        apparent_axis.axhline(0.0, color='#777777', linewidth=0.8)
+        apparent_axis.set_title(
+            'Measured and model-derived apparent anisotropy', fontsize=10)
+        apparent_axis.set_xlabel('Time after measured peak (ns)', fontsize=8)
+        apparent_axis.set_ylabel(
+            r'$r_m(t)=\frac{J_{\parallel}-J_{\perp}}'
+            r'{J_{\parallel}+2J_{\perp}}$', fontsize=8)
+        apparent_axis.legend(fontsize=7)
+
+        decomposition_axis = axes[1, 1]
+        measured_sum = parallel_corrected + 2.0 * perpendicular_corrected
+        measured_difference = parallel_corrected - perpendicular_corrected
+        model_sum = parallel_model_corrected + 2.0 * perpendicular_model_corrected
+        model_difference = parallel_model_corrected - perpendicular_model_corrected
+        normalization = max(
+            float(np.nanmax(np.abs(measured_sum))),
+            float(np.nanmax(np.abs(model_sum))), 1e-12)
+        decomposition_curves = (
+            (measured_sum / normalization, '#555555', '--', r'Measured $S(t)$'),
+            (model_sum / normalization, '#222222', '-', r'Model $S(t)$'),
+            (measured_difference / normalization, '#b06a3c', '--', r'Measured $D(t)$'),
+            (model_difference / normalization, '#a34a28', '-', r'Model $D(t)$'),
+        )
+        for values, color, linestyle, label in decomposition_curves:
+            decomposition_axis.plot(
+                time_relative, values, color=color, linestyle=linestyle,
+                linewidth=1.6, label=label)
+        decomposition_axis.axhline(0.0, color='#777777', linewidth=0.8)
+        decomposition_axis.set_title(
+            r'Corrected decomposition  '
+            r'$S(t)=J_{\parallel}+2J_{\perp}$,  '
+            r'$D(t)=J_{\parallel}-J_{\perp}$', fontsize=9)
+        decomposition_axis.set_xlabel('Time after measured peak (ns)', fontsize=8)
+        decomposition_axis.set_ylabel(r'$S(t),D(t)$ / max $|S|$', fontsize=8)
+        decomposition_axis.legend(fontsize=7, ncol=2)
+
+        for axis in axes.flat:
+            axis.tick_params(labelsize=7)
+        self._style_figure(self.interpretation_figure)
+        self.interpretation_canvas.draw_idle()
+
+    def _draw_global_diagnostics(self):
+        assert self.result is not None
+        fit = self.result.polarized_fit
+        assert fit is not None
+        assert fit.parallel_deviance_residual is not None
+        assert fit.perpendicular_deviance_residual is not None
+        assert fit.parallel_irf is not None
+        assert fit.perpendicular_irf is not None
+        axes = self.diagnostics_axes
+        for axis in axes.flat:
+            axis.clear()
+        self.diagnostics_figure.subplots_adjust(
+            left=0.09, right=0.98, bottom=0.17, top=0.91,
+            wspace=0.30, hspace=0.76)
+
+        fit_bins = len(fit.parallel_model)
+        fit_time = self.result.time_ns[:fit_bins]
+        time_relative = fit_time - self.result.time_ns[self.peak_bin]
+        parallel_deviance = np.asarray(fit.parallel_deviance_residual)
+        perpendicular_deviance = np.asarray(fit.perpendicular_deviance_residual)
+        residual_bins = min(
+            fit_bins, parallel_deviance.size, perpendicular_deviance.size)
+        residual_time = time_relative[:residual_bins]
+
+        residual_axis = axes[0, 0]
+        residual_axis.plot(
+            residual_time, parallel_deviance[:residual_bins],
+            color='#2468a2', linewidth=1.2, label='Parallel')
+        residual_axis.plot(
+            residual_time, perpendicular_deviance[:residual_bins],
+            color='#a34a28', linewidth=1.2, label='Perpendicular')
+        residual_axis.axhline(0.0, color='#777777', linewidth=0.8)
+        residual_axis.set_title(
+            r'Signed Poisson-deviance residuals  '
+            r'$R_D=\mathrm{sign}(N-M)\sqrt{2d}$', fontsize=9)
+        residual_axis.set_xlabel('Time after measured peak (ns)', fontsize=8)
+        residual_axis.set_ylabel(r'Signed residual  $R_D$', fontsize=8)
+        residual_axis.legend(fontsize=7)
+
+        contribution_axis = axes[0, 1]
+        contribution_axis.plot(
+            residual_time, parallel_deviance[:residual_bins] ** 2,
+            color='#2468a2', linewidth=1.2, label='Parallel')
+        contribution_axis.plot(
+            residual_time, perpendicular_deviance[:residual_bins] ** 2,
+            color='#a34a28', linewidth=1.2, label='Perpendicular')
+        contribution_axis.set_title(
+            r'Per-bin Poisson-deviance contribution  $R_D^2=2d(N|M)$',
+            fontsize=9)
+        contribution_axis.set_xlabel('Time after measured peak (ns)', fontsize=8)
+        contribution_axis.set_ylabel(r'Deviance contribution  $R_D^2$', fontsize=8)
+        contribution_axis.legend(fontsize=7)
+
+        irf_axis = axes[1, 0]
+        bin_width_ns = float(np.median(np.diff(fit_time)))
+        irf_time = fit_time - fit_time[0]
+        shifted_irf_time = irf_time + fit.common_irf_shift_bins * bin_width_ns
+        irf_axis.plot(
+            shifted_irf_time[:len(fit.parallel_irf)], fit.parallel_irf,
+            color='#2468a2', linewidth=1.8, label=r'$L_{\parallel}$')
+        irf_axis.plot(
+            shifted_irf_time[:len(fit.perpendicular_irf)], fit.perpendicular_irf,
+            color='#a34a28', linewidth=1.8, label=r'$L_{\perp}$')
+        irf_axis.set_title(
+            r'Polarization-specific IRFs  '
+            r'$L_{\parallel}(t-\delta),L_{\perp}(t-\delta)$', fontsize=9)
+        irf_axis.set_xlabel('Model time with fitted shift (ns)', fontsize=8)
+        irf_axis.set_ylabel(r'Normalized response  $L(t)$', fontsize=8)
+        irf_axis.legend(fontsize=7)
+        irf_axis.text(
+            0.98, 0.92,
+            rf'$\delta={fit.common_irf_shift_bins:.3g}$ bins',
+            ha='right', va='top', fontsize=7, transform=irf_axis.transAxes)
+
+        support_axis = axes[1, 1]
+        parallel_observed = (
+            self.result.parallel_decay[:fit_bins] + self.result.parallel_background)
+        perpendicular_observed = (
+            self.result.perpendicular_decay[:fit_bins]
+            + self.result.perpendicular_background)
+        measured_sum = (
+            (parallel_observed - fit.parallel_background)
+            / self.result.parallel_exposure
+            + 2.0 * self.result.g_factor
+            * (perpendicular_observed - fit.perpendicular_background)
+            / self.result.perpendicular_exposure)
+        model_sum = (
+            (fit.parallel_model - fit.parallel_background)
+            / self.result.parallel_exposure
+            + 2.0 * self.result.g_factor
+            * (fit.perpendicular_model - fit.perpendicular_background)
+            / self.result.perpendicular_exposure)
+        support_axis.semilogy(
+            time_relative, np.where(measured_sum > 0, measured_sum, np.nan),
+            color='#777777', linewidth=1.0, label='Measured corrected sum')
+        support_axis.semilogy(
+            time_relative, np.where(model_sum > 0, model_sum, np.nan),
+            color='#2468a2', linewidth=1.8, label='Model corrected sum')
+        support_axis.axvline(
+            0.0, color='#222222', linestyle=':', linewidth=1.0,
+            label='Measured peak')
+        support_axis.axvline(
+            fit.intensity_lifetime_ns, color='#4b8b3b', linestyle='--',
+            linewidth=1.0, label=rf'$\tau={fit.intensity_lifetime_ns:.3g}$ ns')
+        support_axis.axvline(
+            fit.rotational_correlation_ns, color='#6f3c8d', linestyle='--',
+            linewidth=1.0,
+            label=rf'$\theta={fit.rotational_correlation_ns:.3g}$ ns')
+        support_axis.set_title(
+            r'Photon support across fitted laser period  '
+            r'$S(t)=J_{\parallel}+2J_{\perp}$', fontsize=9)
+        support_axis.set_xlabel('Time after measured peak (ns)', fontsize=8)
+        support_axis.set_ylabel(r'Corrected photon support  $S(t)$', fontsize=8)
+        support_axis.legend(fontsize=6, ncol=2)
+
+        for axis in axes.flat:
+            axis.tick_params(labelsize=7)
+        self._style_figure(self.diagnostics_figure)
+        self.diagnostics_canvas.draw_idle()
 
     def _save_npz(self):
         if self.result is None:

@@ -2,6 +2,23 @@ import numpy as np
 import pytest
 
 
+def test_signed_poisson_deviance_residuals_use_observed_minus_model_sign():
+    from flimkit.FLIM.anisotropy import signed_poisson_deviance_residuals
+
+    observed = np.array([12.0, 8.0, 0.0])
+    expected = np.array([10.0, 10.0, 2.0])
+    residuals = signed_poisson_deviance_residuals(observed, expected)
+
+    assert residuals[0] > 0
+    assert residuals[1] < 0
+    assert residuals[2] < 0
+    expected_deviance = 2.0 * (
+        (10.0 - 12.0 + 12.0 * np.log(12.0 / 10.0))
+        + (10.0 - 8.0 + 8.0 * np.log(8.0 / 10.0))
+        + 2.0)
+    np.testing.assert_allclose(np.sum(residuals ** 2), expected_deviance)
+
+
 def test_polarized_decay_models_follow_lakowicz_channel_equations():
     from flimkit.FLIM.anisotropy import polarized_decay_models
 
@@ -83,7 +100,7 @@ def test_polarized_decay_models_apply_common_irf_shift():
     np.testing.assert_allclose(shifted[1:], unshifted[:-1])
 
 
-def test_global_polarized_fit_recovers_rotation_shift_and_backgrounds():
+def test_global_polarized_fit_recovers_parameters_and_retains_plot_diagnostics():
     from flimkit.FLIM.anisotropy import (
         fit_polarized_decays, polarized_decay_models)
 
@@ -103,7 +120,8 @@ def test_global_polarized_fit_recovers_rotation_shift_and_backgrounds():
 
     fitted = fit_polarized_decays(
         parallel, perpendicular, time_ns,
-        parallel_irf=parallel_irf, perpendicular_irf=perpendicular_irf,
+        parallel_irf=parallel_irf.tolist(),
+        perpendicular_irf=perpendicular_irf.tolist(),
         intensity_lifetime_ns=3.2,
         g_factor=1.3, parallel_exposure=1.5,
         perpendicular_exposure=0.8,
@@ -121,6 +139,16 @@ def test_global_polarized_fit_recovers_rotation_shift_and_backgrounds():
     assert fitted.perpendicular_background == pytest.approx(7.0, rel=1e-3)
     np.testing.assert_allclose(fitted.parallel_model, parallel, rtol=1e-5)
     np.testing.assert_allclose(fitted.perpendicular_model, perpendicular, rtol=1e-5)
+    np.testing.assert_allclose(
+        fitted.parallel_irf, parallel_irf / parallel_irf.sum())
+    np.testing.assert_allclose(
+        fitted.perpendicular_irf, perpendicular_irf / perpendicular_irf.sum())
+    assert fitted.parallel_deviance_residual.shape == parallel.shape
+    assert fitted.perpendicular_deviance_residual.shape == perpendicular.shape
+    np.testing.assert_allclose(
+        np.sum(fitted.parallel_deviance_residual ** 2)
+        + np.sum(fitted.perpendicular_deviance_residual ** 2),
+        fitted.poisson_deviance)
 
 
 def test_global_fit_avoids_unequal_irf_bias_from_divided_anisotropy():
@@ -527,7 +555,11 @@ def test_save_anisotropy_npz_preserves_masks_and_safe_metadata(tmp_path):
         message='complete',
         common_irf_shift_bins=0.7,
         parallel_background=2.5,
-        perpendicular_background=7.0)
+        perpendicular_background=7.0,
+        parallel_deviance_residual=np.array([0.1, -0.2, 0.3]),
+        perpendicular_deviance_residual=np.array([-0.1, 0.2, -0.3]),
+        parallel_irf=np.array([0.1, 0.8, 0.1]),
+        perpendicular_irf=np.array([0.2, 0.7, 0.1]))
     path = tmp_path / 'result.npz'
 
     save_anisotropy_npz(result, path)
@@ -553,3 +585,13 @@ def test_save_anisotropy_npz_preserves_masks_and_safe_metadata(tmp_path):
         (result.parallel_decay + result.parallel_background)[:3])
     np.testing.assert_array_equal(
         saved['fit_parallel_model'], result.polarized_fit.parallel_model)
+    np.testing.assert_array_equal(
+        saved['fit_parallel_deviance_residual'],
+        result.polarized_fit.parallel_deviance_residual)
+    np.testing.assert_array_equal(
+        saved['fit_perpendicular_deviance_residual'],
+        result.polarized_fit.perpendicular_deviance_residual)
+    np.testing.assert_array_equal(
+        saved['fit_parallel_irf'], result.polarized_fit.parallel_irf)
+    np.testing.assert_array_equal(
+        saved['fit_perpendicular_irf'], result.polarized_fit.perpendicular_irf)

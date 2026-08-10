@@ -49,6 +49,10 @@ class PolarizedFitResult:
     common_irf_shift_bins: float = 0.0
     parallel_background: float = 0.0
     perpendicular_background: float = 0.0
+    parallel_deviance_residual: np.ndarray | None = None
+    perpendicular_deviance_residual: np.ndarray | None = None
+    parallel_irf: np.ndarray | None = None
+    perpendicular_irf: np.ndarray | None = None
 
 
 def apply_translation(data, shift_yx):
@@ -131,6 +135,17 @@ def spatial_window_sum(data, window_size=1, stride=1):
                 - cumulative[window_size:, :-window_size]
                 + cumulative[:-window_size, :-window_size])
     return windowed[::stride, ::stride]
+
+
+def signed_poisson_deviance_residuals(observed, expected):
+    observed = np.asarray(observed, dtype=float)
+    expected = np.maximum(np.asarray(expected, dtype=float), 1e-12)
+    contribution = expected - observed
+    positive = observed > 0
+    contribution[positive] += observed[positive] * np.log(
+        observed[positive] / expected[positive])
+    contribution = np.maximum(2.0 * contribution, 0.0)
+    return np.sign(observed - expected) * np.sqrt(contribution)
 
 
 def _select_time_bins(data, selector, name):
@@ -246,6 +261,8 @@ def fit_polarized_decays(parallel, perpendicular, time_ns,
     parallel = np.asarray(parallel, dtype=float)
     perpendicular = np.asarray(perpendicular, dtype=float)
     time_ns = np.asarray(time_ns, dtype=float)
+    parallel_irf = np.asarray(parallel_irf, dtype=float)
+    perpendicular_irf = np.asarray(perpendicular_irf, dtype=float)
     if parallel.shape != time_ns.shape or perpendicular.shape != time_ns.shape:
         raise ValueError('Polarized decays must match time_ns')
     if (np.any(~np.isfinite(parallel)) or np.any(parallel < 0)
@@ -316,22 +333,13 @@ def fit_polarized_decays(parallel, perpendicular, time_ns,
             repetition_period_ns=repetition_period_ns,
             common_irf_shift_bins=shift_bins)
 
-    def poisson_residual(observed, expected):
-        expected = np.maximum(expected, 1e-12)
-        contribution = expected - observed
-        positive = observed > 0
-        contribution[positive] += observed[positive] * np.log(
-            observed[positive] / expected[positive])
-        contribution = np.maximum(2.0 * contribution, 0.0)
-        return np.sign(expected - observed) * np.sqrt(contribution)
-
     def residuals(params):
         parallel_model, perpendicular_model = models(params)
         return np.concatenate([
-            poisson_residual(
+            signed_poisson_deviance_residuals(
                 selected_parallel,
                 _select_time_bins(parallel_model, fit_bins, 'fit_bins')),
-            poisson_residual(
+            signed_poisson_deviance_residuals(
                 selected_perpendicular,
                 _select_time_bins(perpendicular_model, fit_bins, 'fit_bins')),
         ])
@@ -381,7 +389,11 @@ def fit_polarized_decays(parallel, perpendicular, time_ns,
         parameters_at_bounds=parameters_at_bounds,
         common_irf_shift_bins=shift_bins,
         parallel_background=parallel_bg,
-        perpendicular_background=perpendicular_bg)
+        perpendicular_background=perpendicular_bg,
+        parallel_deviance_residual=final_residuals[:selected_parallel.size],
+        perpendicular_deviance_residual=final_residuals[selected_parallel.size:],
+        parallel_irf=parallel_irf / parallel_irf.sum(),
+        perpendicular_irf=perpendicular_irf / perpendicular_irf.sum())
 
 
 def calculate_anisotropy(parallel, perpendicular, g_factor=1.0,
@@ -635,6 +647,17 @@ def save_anisotropy_npz(result, path):
                 fit.parameters_at_bounds, dtype=str),
             'fit_success': fit.success,
             'fit_message': fit.message,
+        })
+        optional_fit_arrays = {
+            'fit_parallel_deviance_residual': fit.parallel_deviance_residual,
+            'fit_perpendicular_deviance_residual': (
+                fit.perpendicular_deviance_residual),
+            'fit_parallel_irf': fit.parallel_irf,
+            'fit_perpendicular_irf': fit.perpendicular_irf,
+        }
+        payload.update({
+            key: value for key, value in optional_fit_arrays.items()
+            if value is not None
         })
     reserved_keys = set(payload)
     for key, value in result.metadata.items():
