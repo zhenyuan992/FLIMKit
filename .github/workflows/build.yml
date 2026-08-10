@@ -1,33 +1,41 @@
 name: Build FLIMKit App
 
 on:
-  push:
-    tags:
-      - "v*"         
-  workflow_dispatch:  
+  workflow_dispatch:
     inputs:
+      source_ref:
+        description: "Branch, tag, or commit SHA to build"
+        required: true
+        default: "main"
+        type: string
       publish_release:
         description: "Publish artifacts to a GitHub Release"
-        required: false
-        default: "true"
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   get-version:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.read.outputs.version }}
-      tag:     ${{ steps.read.outputs.tag }}
+      version:    ${{ steps.read.outputs.version }}
+      tag:        ${{ steps.read.outputs.tag }}
+      source_sha: ${{ steps.read.outputs.source_sha }}
     steps:
-      - name: Checkout code
+      - name: Checkout requested source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
 
-      - name: Read version from flimkit/_version.py
+      - name: Resolve source and read version
         id: read
         run: |
+          SOURCE_SHA=$(git rev-parse HEAD)
           VERSION=$(python -c "import re; m = re.search(r'__version__\s*=\s*[\"\'](.*?)[\"\']', open('flimkit/_version.py').read()); print(m.group(1))")
-          echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION"     >> "$GITHUB_OUTPUT"
-          echo "Building FLIMKit $VERSION (tag: v$VERSION)"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"       >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION"          >> "$GITHUB_OUTPUT"
+          echo "Building commit $SOURCE_SHA as FLIMKit $VERSION"
 
   build:
     needs: get-version
@@ -44,8 +52,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout resolved source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.get-version.outputs.source_sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -124,7 +134,7 @@ jobs:
   release:
     needs: [get-version, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || inputs.publish_release == 'true'
+    if: inputs.publish_release == true
     permissions:
       contents: write
 
