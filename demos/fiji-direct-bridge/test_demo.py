@@ -1,6 +1,9 @@
 import json
+import os
+import subprocess
 import threading
 from io import BytesIO
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -97,3 +100,37 @@ def test_authenticated_geojson_roi_is_received_exactly(running_server):
     assert response.status == 200
     assert reply == {'received_features': 1}
     assert state.received_rois == [payload]
+
+
+def test_installed_fiji_fetches_images_and_posts_roi(running_server):
+    fiji_path = os.environ.get('FIJI_PATH')
+    if not fiji_path:
+        pytest.skip('set FIJI_PATH to run the live Fiji demo test')
+    assert fiji_path is not None
+    script = Path(__file__).with_name('FijiBridgeDemo.groovy')
+    assert script.exists(), f'missing Fiji demo script: {script}'
+    base_url, state = running_server
+
+    completed = subprocess.run(
+        [
+            fiji_path,
+            '--headless',
+            '--run',
+            str(script),
+            f'baseUrl="{base_url}",token="test-token"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    assert 'FIJI_IMAGES_OK intensity=34.0 lifetime=3.4' in output, output
+    assert 'FIJI_ROI_POST_OK features=1' in output, output
+    assert len(state.received_rois) == 1
+    feature = state.received_rois[0]['features'][0]
+    assert feature['properties']['name'] == 'Fiji polygon'
+    assert feature['geometry']['coordinates'] == [
+        [[1.25, 2.5], [4.5, 2.5], [3.0, 4.0], [1.25, 2.5]],
+    ]
